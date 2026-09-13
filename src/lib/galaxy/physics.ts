@@ -38,45 +38,52 @@ function massPlummer(r: number, core: number) {
 
 function massExponentialDisk(r: number, radGalaxy: number) {
   const rd = radGalaxy / 3.1;
-  const x = r / Math.max(rd, 0.2);
-  return DISK_MASS * (1 - Math.exp(-x) * (1 + x));
+  const x = r / rd;
+  return DISK_MASS * (1 - (1 + x) * Math.exp(-x));
 }
 
 function massNfw(r: number) {
   const rs = HALO_R200 / HALO_C;
   const x = r / rs;
-  const c = HALO_C;
-  const norm = Math.log(1 + c) - c / (1 + c);
-  const enclosed = Math.log(1 + x) - x / (1 + x);
-  return HALO_MASS * (enclosed / Math.max(norm, 1e-6));
+  const gc = Math.log(1 + HALO_C) - HALO_C / (1 + HALO_C);
+  return (HALO_MASS * (Math.log(1 + x) - x / (1 + x))) / gc;
 }
 
-export function enclosedMass(r: number, p: GalaxyParams) {
-  const rr = Math.max(r, 0.05);
-  let m = massPlummer(rr, p.radCore) + massExponentialDisk(rr, p.radGalaxy);
-  if (p.hasDarkMatter) m += massNfw(rr);
-  return m;
-}
-
-/** Circular speed km/s. */
+/** Circular speed in km/s. Plummer bulge + exponential disk + optional NFW halo. */
 export function circularSpeed(r: number, p: GalaxyParams) {
-  const rr = Math.max(r, 0.05);
-  return Math.sqrt((G_KPC * enclosedMass(rr, p)) / rr);
+  if (r < 0.05) return 0;
+  const mVis = massPlummer(r, p.radCore) + massExponentialDisk(r, p.radGalaxy);
+  const mHalo = p.hasDarkMatter ? massNfw(r) : 0;
+  return Math.sqrt((G_KPC * (mVis + mHalo)) / r);
 }
 
-/** Angular rate in radians per year (matches the orbit shader). */
+/** Angular speed in radians per year. */
 export function orbitalOmega(r: number, p: GalaxyParams) {
   const v = circularSpeed(r, p);
-  const omegaPerSec = v / (Math.max(r, 0.05) * KPC_TO_KM);
-  return omegaPerSec * SEC_PER_YEAR;
+  if (v <= 0 || r < 0.05) return 0;
+  const rKm = r * KPC_TO_KM;
+  return (v / rKm) * SEC_PER_YEAR;
 }
 
-export function rotationCurve(p: GalaxyParams, n = 48) {
-  const pts: { r: number; v: number; vNoHalo: number }[] = [];
-  const pNo = { ...p, hasDarkMatter: false };
-  for (let i = 1; i <= n; i++) {
-    const r = (p.radGalaxy * 1.35 * i) / n;
-    pts.push({ r, v: circularSpeed(r, p), vNoHalo: circularSpeed(r, pNo) });
+/** Kepler angular speed. `mu` is GM in scene-units³ / second². */
+export function keplerOmega(r: number, mu: number) {
+  const rr = Math.max(r, 1e-4);
+  return Math.sqrt(mu / (rr * rr * rr));
+}
+
+/** Snodgrass solar law: equator laps the poles. `lat` in radians. */
+export function solarOmega(lat: number, omegaEq: number) {
+  const s2 = Math.sin(lat);
+  const ss = s2 * s2;
+  return omegaEq * (1 - 0.19 * ss - 0.14 * ss * ss);
+}
+
+export function sampleRotationCurve(p: GalaxyParams, n = 28) {
+  const pts: { r: number; v: number }[] = [];
+  const rMax = p.radGalaxy * 1.7;
+  for (let i = 0; i < n; i++) {
+    const r = 0.18 + (rMax - 0.18) * (i / (n - 1));
+    pts.push({ r, v: circularSpeed(r, p) });
   }
   return pts;
 }

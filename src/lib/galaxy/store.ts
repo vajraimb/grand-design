@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { PRESETS } from "./presets";
-import type { EngineStats, GalaxyParams, PresetId, Quality, ScreenLabel } from "./types";
+import type { EngineStats, FlightHud, GalaxyParams, PresetId, Quality, ScreenLabel } from "./types";
 
 type GalaxyStore = {
   preset: PresetId;
@@ -15,6 +15,9 @@ type GalaxyStore = {
   brightness: number;
   uiHidden: boolean;
   sheetOpen: boolean;
+  flyMode: boolean;
+  targetId: string | null;
+  autoApproach: boolean;
   setPreset: (id: PresetId) => void;
   patchParams: (patch: Partial<GalaxyParams>) => void;
   setQuality: (q: Quality) => void;
@@ -27,6 +30,9 @@ type GalaxyStore = {
   setBrightness: (v: number) => void;
   setUiHidden: (v: boolean) => void;
   setSheetOpen: (v: boolean) => void;
+  setFlyMode: (v: boolean) => void;
+  setTargetId: (id: string | null) => void;
+  approach: (id: string) => void;
   reshuffle: () => void;
 };
 
@@ -45,6 +51,9 @@ export const useGalaxyStore = create<GalaxyStore>((set, get) => ({
   brightness: 1.05,
   uiHidden: false,
   sheetOpen: false,
+  flyMode: false,
+  targetId: null,
+  autoApproach: false,
   setPreset: (id) =>
     set({
       preset: id,
@@ -61,6 +70,22 @@ export const useGalaxyStore = create<GalaxyStore>((set, get) => ({
   setBrightness: (v) => set({ brightness: v }),
   setUiHidden: (v) => set({ uiHidden: v }),
   setSheetOpen: (v) => set({ sheetOpen: v }),
+  setFlyMode: (v) =>
+    set(
+      v
+        ? { flyMode: true, autoRotate: false, showLabels: true }
+        : { flyMode: false, autoApproach: false, targetId: null },
+    ),
+  setTargetId: (id) => set({ targetId: id, autoApproach: Boolean(id) }),
+  approach: (id) =>
+    set({
+      flyMode: true,
+      autoRotate: false,
+      showLabels: true,
+      targetId: id,
+      autoApproach: true,
+      paused: false,
+    }),
   reshuffle: () =>
     set({
       params: {
@@ -80,4 +105,12 @@ export const useEngineStats = create<EngineStats>(() => ({
 
 export const useLandmarkScreen = create<{ labels: ScreenLabel[] }>(() => ({
   labels: [],
+}));
+
+export const useFlightHud = create<FlightHud>(() => ({
+  flying: false,
+  speed: 0,
+  dist: 0,
+  targetName: "",
+  arrived: false,
 }));

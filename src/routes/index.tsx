@@ -6,7 +6,7 @@ export const Route = createFileRoute("/")({ component: Home });
 
 function Home() {
   return (
-    <main className="relative h-dvh w-full overflow-hidden bg-bg text-fg">
+    <main className="absolute inset-0 overflow-hidden bg-bg text-fg">
       <GalaxyView />
       <Overlay />
     </main>

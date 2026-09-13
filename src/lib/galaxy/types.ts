@@ -1,6 +1,11 @@
 export type Quality = "low" | "medium" | "high";
 
-export type PresetId = "milkyway" | "andromeda" | "whirlpool" | "sa" | "sc";
+export type PresetId =
+  | "milkyway"
+  | "andromeda"
+  | "whirlpool"
+  | "sa"
+  | "sc";
 
 export type GalaxyParams = {
   radGalaxy: number;
@@ -52,7 +57,16 @@ export type EngineStats = {
   hiiCount: number;
 };
 
+export type FlightHud = {
+  flying: boolean;
+  speed: number;
+  dist: number;
+  targetName: string;
+  arrived: boolean;
+};
+
 export type LandmarkKind = "center" | "arm" | "sun" | "companion";
+export type LandmarkAnchor = "center" | "start" | "end";
 
 export type WorldLandmark = {
   id: string;
@@ -71,5 +85,5 @@ export type ScreenLabel = {
   x: number;
   y: number;
   depth: number;
-  anchor: "center" | "start" | "end";
+  anchor: LandmarkAnchor;
 };

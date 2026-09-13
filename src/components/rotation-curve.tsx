@@ -1,34 +1,40 @@
-import { rotationCurve } from "@/lib/galaxy/physics";
+import { sampleRotationCurve } from "@/lib/galaxy/physics";
 import type { GalaxyParams } from "@/lib/galaxy/types";
 
 export function RotationCurve({ params }: { params: GalaxyParams }) {
-  const pts = rotationCurve(params, 40);
-  const w = 288;
-  const h = 92;
-  const pad = { l: 28, r: 8, t: 8, b: 20 };
-  const maxR = pts[pts.length - 1]?.r || 1;
-  const maxV = Math.max(220, ...pts.flatMap((p) => [p.v, p.vNoHalo]));
-  const x = (r: number) => pad.l + ((w - pad.l - pad.r) * r) / maxR;
-  const y = (v: number) => h - pad.b - ((h - pad.t - pad.b) * v) / maxV;
-  const line = (key: "v" | "vNoHalo") =>
-    pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.r).toFixed(1)} ${y(p[key]).toFixed(1)}`).join(" ");
+  const withDm = sampleRotationCurve({ ...params, hasDarkMatter: true });
+  const noDm = sampleRotationCurve({ ...params, hasDarkMatter: false });
+  const rMax = Math.max(...withDm.map((p) => p.r), 1);
+  const vMax = Math.max(...withDm.map((p) => p.v), ...noDm.map((p) => p.v), 1) * 1.08;
+  const w = 220;
+  const h = 72;
+  const pad = { l: 4, r: 4, t: 6, b: 6 };
+
+  const sx = (r: number) => pad.l + (r / rMax) * (w - pad.l - pad.r);
+  const sy = (v: number) => h - pad.b - (v / vMax) * (h - pad.t - pad.b);
+  const path = (pts: { r: number; v: number }[]) =>
+    pts.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.r).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
 
   return (
     <div>
-      <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">旋转曲线</p>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full text-fg" aria-hidden="true">
-        <path d={line("vNoHalo")} fill="none" stroke="currentColor" strokeOpacity="0.28" strokeWidth="1.2" />
-        <path d={line("v")} fill="none" stroke="currentColor" strokeOpacity="0.85" strokeWidth="1.4" />
-        <text x={pad.l} y={h - 4} className="fill-subtle" fontSize="9">
-          0
-        </text>
-        <text x={w - 36} y={h - 4} className="fill-subtle" fontSize="9">
-          {maxR.toFixed(0)} kpc
-        </text>
-        <text x={2} y={pad.t + 8} className="fill-subtle" fontSize="9">
-          {Math.round(maxV)} km/s
-        </text>
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <span className="text-xs font-medium tracking-wide text-muted uppercase">
+          旋转曲线
+        </span>
+        <span className="text-[10px] text-subtle">km/s</span>
+      </div>
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="h-14 w-full text-fg"
+        aria-hidden="true"
+      >
+        <path d={path(noDm)} fill="none" stroke="currentColor" strokeOpacity="0.28" strokeWidth="1.2" />
+        <path d={path(withDm)} fill="none" stroke="currentColor" strokeOpacity="0.9" strokeWidth="1.4" />
       </svg>
+      <div className="mt-1 flex justify-between text-[10px] text-subtle">
+        <span>可见物质</span>
+        <span>含暗物质晕</span>
+      </div>
     </div>
   );
 }

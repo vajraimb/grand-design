@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from "react";
-import { Eye, EyeOff, Pause, Play, RefreshCw, Settings2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Eye, EyeOff, Pause, Play, RefreshCw, Rocket, Settings2 } from "lucide-react";
+import { FlightHud } from "@/components/flight-hud";
 import { RotationCurve } from "@/components/rotation-curve";
 import { SliderField } from "@/components/ui/slider";
 import { SwitchField } from "@/components/ui/switch";
@@ -29,6 +30,7 @@ function Controls() {
   const showLabels = useGalaxyStore((s) => s.showLabels);
   const timeScale = useGalaxyStore((s) => s.timeScale);
   const brightness = useGalaxyStore((s) => s.brightness);
+  const flyMode = useGalaxyStore((s) => s.flyMode);
   const setPreset = useGalaxyStore((s) => s.setPreset);
   const patchParams = useGalaxyStore((s) => s.patchParams);
   const setQuality = useGalaxyStore((s) => s.setQuality);
@@ -38,12 +40,15 @@ function Controls() {
   const setShowLabels = useGalaxyStore((s) => s.setShowLabels);
   const setTimeScale = useGalaxyStore((s) => s.setTimeScale);
   const setBrightness = useGalaxyStore((s) => s.setBrightness);
+  const setFlyMode = useGalaxyStore((s) => s.setFlyMode);
   const meta = PRESET_LIST.find((p) => p.id === preset);
 
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">形态</p>
+        <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">
+          形态
+        </p>
         <div className="flex flex-wrap gap-1.5">
           {PRESET_LIST.map((p) => (
             <button
@@ -52,7 +57,9 @@ function Controls() {
               onClick={() => setPreset(p.id)}
               className={cn(
                 "h-8 rounded-md px-2.5 text-xs font-medium transition-colors duration-(--motion-quick) ease-(--ease-out)",
-                preset === p.id ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg",
+                preset === p.id
+                  ? "bg-fg text-accent-fg"
+                  : "bg-surface text-muted hover:text-fg",
               )}
             >
               {p.name}
@@ -131,12 +138,15 @@ function Controls() {
       <SwitchField label="尘埃带" checked={showDust} onCheckedChange={setShowDust} />
       <SwitchField label="H II 区" checked={showHii} onCheckedChange={setShowHii} />
       <SwitchField label="地标" checked={showLabels} onCheckedChange={setShowLabels} />
+      <SwitchField label="驾驶" checked={flyMode} onCheckedChange={setFlyMode} />
       <SwitchField label="自动旋转" checked={autoRotate} onCheckedChange={setAutoRotate} />
 
       <RotationCurve params={params} />
 
       <div>
-        <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">粒子</p>
+        <p className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">
+          粒子
+        </p>
         <div className="flex gap-1.5">
           {(["low", "medium", "high"] as const).map((q) => (
             <button
@@ -145,7 +155,9 @@ function Controls() {
               onClick={() => setQuality(q)}
               className={cn(
                 "h-8 flex-1 rounded-md text-xs font-medium transition-colors duration-(--motion-quick) ease-(--ease-out)",
-                quality === q ? "bg-fg text-accent-fg" : "bg-surface text-muted hover:text-fg",
+                quality === q
+                  ? "bg-fg text-accent-fg"
+                  : "bg-surface text-muted hover:text-fg",
               )}
             >
               {q === "low" ? "低" : q === "medium" ? "中" : "高"}
@@ -161,12 +173,19 @@ export function Overlay() {
   const paused = useGalaxyStore((s) => s.paused);
   const uiHidden = useGalaxyStore((s) => s.uiHidden);
   const sheetOpen = useGalaxyStore((s) => s.sheetOpen);
+  const flyMode = useGalaxyStore((s) => s.flyMode);
   const setPaused = useGalaxyStore((s) => s.setPaused);
   const setUiHidden = useGalaxyStore((s) => s.setUiHidden);
   const setSheetOpen = useGalaxyStore((s) => s.setSheetOpen);
   const setShowLabels = useGalaxyStore((s) => s.setShowLabels);
+  const setFlyMode = useGalaxyStore((s) => s.setFlyMode);
   const reshuffle = useGalaxyStore((s) => s.reshuffle);
   const stats = useEngineStats();
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -179,10 +198,11 @@ export function Overlay() {
       if (e.code === "KeyL") setShowLabels(!useGalaxyStore.getState().showLabels);
       if (e.code === "KeyH") setUiHidden(!useGalaxyStore.getState().uiHidden);
       if (e.code === "KeyR") reshuffle();
+      if (e.code === "KeyF") setFlyMode(!useGalaxyStore.getState().flyMode);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reshuffle, setPaused, setUiHidden, setShowLabels]);
+  }, [reshuffle, setPaused, setUiHidden, setShowLabels, setFlyMode]);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 text-fg">
@@ -210,11 +230,12 @@ export function Overlay() {
           Grand Design
         </p>
         <p className="mt-1.5 max-w-64 text-pretty text-xs leading-snug text-muted sm:max-w-xs">
-          密度波 · 银心 · 旋臂 · 太阳
+          密度波 · 银心 · 旋臂 · 太阳{flyMode ? " · 驾驶" : ""}
         </p>
       </header>
 
       <LandmarkLayer />
+      <FlightHud />
 
       <div className="pointer-events-auto absolute top-[max(1rem,env(safe-area-inset-top))] right-3 flex gap-1.5 sm:right-6">
         <div
@@ -223,17 +244,33 @@ export function Overlay() {
             uiHidden ? "pointer-events-none opacity-0" : "opacity-100",
           )}
         >
-          <IconBtn label={paused ? "继续" : "暂停"} onClick={() => setPaused(!paused)}>
+          <IconBtn
+            label={flyMode ? "退出驾驶" : "驾驶"}
+            onClick={() => setFlyMode(!flyMode)}
+          >
+            <Rocket className={cn("size-4", flyMode && "text-fg")} />
+          </IconBtn>
+          <IconBtn
+            label={paused ? "继续" : "暂停"}
+            onClick={() => setPaused(!paused)}
+          >
             {paused ? <Play className="size-4" /> : <Pause className="size-4" />}
           </IconBtn>
           <IconBtn label="重新抽样" onClick={reshuffle}>
             <RefreshCw className="size-4" />
           </IconBtn>
-          <IconBtn label="设定" className="lg:hidden" onClick={() => setSheetOpen(!sheetOpen)}>
+          <IconBtn
+            label="设定"
+            className="lg:hidden"
+            onClick={() => setSheetOpen(!sheetOpen)}
+          >
             <Settings2 className="size-4" />
           </IconBtn>
         </div>
-        <IconBtn label={uiHidden ? "显示界面" : "隐藏界面"} onClick={() => setUiHidden(!uiHidden)}>
+        <IconBtn
+          label={uiHidden ? "显示界面" : "隐藏界面"}
+          onClick={() => setUiHidden(!uiHidden)}
+        >
           {uiHidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
         </IconBtn>
       </div>
@@ -245,14 +282,14 @@ export function Overlay() {
           uiHidden ? "pointer-events-none opacity-0" : "opacity-100",
         )}
       >
-        <Controls />
+        {hydrated ? <Controls /> : null}
       </aside>
 
       <div
         className={cn(
           "pointer-events-auto absolute inset-x-0 bottom-0 lg:hidden",
           "transition-opacity duration-(--motion-fast) ease-(--ease-out)",
-          uiHidden && !sheetOpen ? "pointer-events-none opacity-0" : "opacity-100",
+          flyMode || (uiHidden && !sheetOpen) ? "pointer-events-none opacity-0" : "opacity-100",
         )}
       >
         <div className="rounded-t-xl bg-elevated/92 shadow-border">
@@ -276,7 +313,7 @@ export function Overlay() {
         className={cn(
           "pointer-events-none absolute bottom-3 left-4 hidden font-mono text-xs tabular-nums text-subtle sm:flex sm:gap-4 lg:bottom-6 lg:left-6",
           "transition-opacity duration-(--motion-fast) ease-(--ease-out)",
-          uiHidden ? "opacity-0" : "opacity-100",
+          uiHidden || flyMode ? "opacity-0" : "opacity-100",
         )}
       >
         <span>{stats.starCount.toLocaleString()} 星</span>
@@ -292,14 +329,23 @@ export function Overlay() {
 function LandmarkLayer() {
   const labels = useLandmarkScreen((s) => s.labels);
   const show = useGalaxyStore((s) => s.showLabels);
+  const targetId = useGalaxyStore((s) => s.targetId);
+  const approach = useGalaxyStore((s) => s.approach);
   if (!show || labels.length === 0) return null;
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       {labels.map((lab) => (
-        <div
+        <button
           key={lab.id}
+          type="button"
           data-landmark={lab.id}
-          className={cn("landmark", kindClass(lab.kind), anchorClass(lab.anchor))}
+          onClick={() => approach(lab.id)}
+          className={cn(
+            "landmark",
+            kindClass(lab.kind),
+            anchorClass(lab.anchor),
+            targetId === lab.id && "landmark-locked",
+          )}
           style={{ left: lab.x, top: lab.y }}
         >
           <span className="landmark-copy">
@@ -307,7 +353,7 @@ function LandmarkLayer() {
             {lab.sub ? <span className="landmark-sub">{lab.sub}</span> : null}
           </span>
           <span className="landmark-dot" />
-        </div>
+        </button>
       ))}
     </div>
   );

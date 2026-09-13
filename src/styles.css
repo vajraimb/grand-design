@@ -36,8 +36,16 @@
   body,
   #app {
     height: 100%;
+    width: 100%;
+    overflow: hidden;
     background: var(--color-bg);
     color: var(--color-fg);
+  }
+
+  html,
+  body {
+    position: fixed;
+    inset: 0;
   }
 
   body {
@@ -63,6 +71,12 @@
 }
 
 @layer components {
+  .sheet-peek {
+    transform: translateY(calc(100% - 3.5rem));
+  }
+  .sheet-open {
+    transform: translateY(0);
+  }
   .sheet-body {
     max-height: min(62vh, 28rem);
   }
@@ -72,17 +86,22 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    transform: translate(-50%, calc(-100% + 4px));
-    pointer-events: none;
+    transform: translate(-50%, calc(-100% + 3px));
+    pointer-events: auto;
     white-space: nowrap;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
   }
   .landmark-start {
-    transform: translate(0, calc(-100% + 4px));
     align-items: flex-start;
+    transform: translate(0, calc(-100% + 3px));
   }
   .landmark-end {
-    transform: translate(-100%, calc(-100% + 4px));
     align-items: flex-end;
+    transform: translate(-100%, calc(-100% + 3px));
   }
   .landmark-dot {
     width: 5px;
@@ -90,6 +109,7 @@
     border-radius: 999px;
     background: var(--color-fg);
     margin-top: 4px;
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-bg) 55%, transparent);
   }
   .landmark-copy {
     display: flex;
@@ -101,15 +121,22 @@
     background: color-mix(in oklab, var(--color-bg) 78%, transparent);
     box-shadow: 0 0 0 1px var(--color-border);
   }
+  .landmark:hover .landmark-copy,
+  .landmark-locked .landmark-copy {
+    background: color-mix(in oklab, var(--color-bg) 52%, var(--color-fg) 10%);
+    box-shadow: 0 0 0 1px var(--color-border-strong);
+  }
   .landmark-name {
     font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: 0.04em;
+    line-height: 1.25;
     color: var(--color-fg);
   }
   .landmark-sub {
     font-size: 0.625rem;
-    color: var(--color-subtle);
+    line-height: 1.3;
+    color: var(--color-muted);
   }
   .landmark-arm .landmark-name {
     color: var(--color-muted);
@@ -123,7 +150,17 @@
   .landmark-sun .landmark-dot {
     width: 7px;
     height: 7px;
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-fg) 20%, transparent);
+    background: var(--color-fg);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-fg) 28%, transparent);
+  }
+  .landmark-sun .landmark-copy {
+    background: color-mix(in oklab, var(--color-bg) 86%, transparent);
+    box-shadow: 0 0 0 1px var(--color-border-strong);
+  }
+  .landmark-center .landmark-name {
+    font-family: var(--font-display);
+    font-size: 0.875rem;
+    letter-spacing: 0.02em;
   }
   .landmark-companion .landmark-name {
     color: var(--color-accent);

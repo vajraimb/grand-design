@@ -1,5 +1,12 @@
 import { diskPoint } from "./orbit";
-import type { GalaxyParams, PresetId, ScreenLabel, WorldLandmark } from "./types";
+import type {
+  GalaxyParams,
+  LandmarkAnchor,
+  LandmarkKind,
+  PresetId,
+  ScreenLabel,
+  WorldLandmark,
+} from "./types";
 
 export function landmarksFor(preset: PresetId, p: GalaxyParams): WorldLandmark[] {
   const R = p.radGalaxy;
@@ -16,7 +23,7 @@ export function landmarksFor(preset: PresetId, p: GalaxyParams): WorldLandmark[]
       },
       { id: "scutum", name: "盾牌臂", kind: "arm", priority: 2, world: diskPoint(R * 0.32, 0.2, p) },
       { id: "sgr", name: "人马臂", kind: "arm", priority: 2, world: diskPoint(R * 0.48, Math.PI, p) },
-      { id: "perseus", name: "英仙臂", kind: "arm", priority: 2, world: diskPoint(R * 0.7, -1.0, p) },
+      { id: "perseus", name: "英仙臂", kind: "arm", priority: 2, world: diskPoint(R * 0.72, -1.05, p) },
       { id: "outer", name: "外臂", kind: "arm", priority: 1, world: diskPoint(R * 0.88, Math.PI - 0.35, p) },
       { id: "lmc", name: "大麦哲伦", sub: "伴星系", kind: "companion", priority: 4, world: { x: -9.2, y: -2.4, z: 7.6 } },
       { id: "smc", name: "小麦哲伦", sub: "伴星系", kind: "companion", priority: 3, world: { x: -6.8, y: -3.0, z: 8.4 } },
@@ -89,32 +96,43 @@ export function companionClouds(preset: PresetId, p: GalaxyParams, qualityN: num
   return [];
 }
 
+/** Camera-azimuth test: NDC z is useless here (near/far 0.15/400 compresses everything to ~0.98). */
+function isFarSideArm(
+  kind: LandmarkKind,
+  world: { x: number; y: number; z: number },
+  cam: { x: number; z: number },
+) {
+  if (kind !== "arm") return false;
+  const camR = Math.hypot(cam.x, cam.z);
+  if (camR < 0.8) return false;
+  const facing = (world.x * cam.x + world.z * cam.z) / camR;
+  return facing < 0.6;
+}
+
 export function projectLandmarks(
   marks: WorldLandmark[],
   project: (x: number, y: number, z: number) => { x: number; y: number; z: number } | null,
   view: { w: number; h: number; padL: number; padR: number; padT: number; padB: number },
-  cam: { x: number; y: number; z: number },
+  cam: { x: number; z: number },
 ): ScreenLabel[] {
-  const placed: { x: number; y: number }[] = [];
+  const placed: { x: number; y: number; pri: number }[] = [];
   const out: ScreenLabel[] = [];
   const sorted = [...marks].sort((a, b) => b.priority - a.priority);
-  const minGap = view.w < 640 ? 44 : 50;
-  const camR = Math.hypot(cam.x, cam.z) || 1;
-  const top = view.padT;
-  const bottom = view.h - view.padB;
-  const left = view.padL;
-  const right = view.w - view.padR;
+  const minGap = view.w < 640 ? 40 : 50;
 
   for (const m of sorted) {
+    if (isFarSideArm(m.kind, m.world, cam)) continue;
+
     const ndc = project(m.world.x, m.world.y, m.world.z);
     if (!ndc) continue;
     let sx = (ndc.x * 0.5 + 0.5) * view.w;
     let sy = (-ndc.y * 0.5 + 0.5) * view.h;
-    let anchor: ScreenLabel["anchor"] = "center";
+    let anchor: LandmarkAnchor = "center";
 
-    const facing = (m.world.x * cam.x + m.world.z * cam.z) / camR;
-    if (m.kind === "arm" && facing < 0.6) continue;
-
+    const left = view.padL;
+    const right = view.w - view.padR;
+    const top = view.padT;
+    const bottom = view.h - view.padB;
     const inX = sx >= left && sx <= right;
     const inY = sy >= top && sy <= bottom;
     if (!inX || !inY) {
@@ -130,8 +148,8 @@ export function projectLandmarks(
     }
 
     let clash = false;
-    for (const prev of placed) {
-      if (Math.hypot(prev.x - sx, prev.y - sy) < minGap) {
+    for (const p of placed) {
+      if (Math.hypot(p.x - sx, p.y - sy) < minGap) {
         clash = true;
         break;
       }
@@ -141,7 +159,7 @@ export function projectLandmarks(
       sy = Math.max(top + 8, sy - 22);
     }
 
-    placed.push({ x: sx, y: sy });
+    placed.push({ x: sx, y: sy, pri: m.priority });
     out.push({
       id: m.id,
       name: m.name,

@@ -1,15 +1,19 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { blackbodyRgb } from "./blackbody";
 import { generateGalaxy, generateStaticCloud } from "./generate";
 import { companionClouds, landmarksFor, projectLandmarks } from "./landmarks";
 import { QUALITY_COUNTS } from "./presets";
 import { STAR_FRAG, STAR_VERT } from "./shaders";
-import { useEngineStats, useGalaxyStore, useLandmarkScreen } from "./store";
+import { createCraft, type Craft } from "./craft";
+import { ApproachWorld } from "./destinations";
+import { FlightSim, flightInput } from "./flight";
+import { useEngineStats, useFlightHud, useGalaxyStore, useLandmarkScreen } from "./store";
 import type { GalaxyParams, ParticleBuffers, ScreenLabel } from "./types";
 
 type Snapshot = ReturnType<typeof useGalaxyStore.getState>;
 
-function glowTexture(size = 64) {
+function glowTexture(size = 256) {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
@@ -62,7 +66,7 @@ function haloStars(n: number) {
   return { pts, geo, mat };
 }
 
-function labelsEq(a: ScreenLabel[], b: ScreenLabel[]) {
+function labelsUnchanged(a: ScreenLabel[], b: ScreenLabel[]) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const p = a[i];
@@ -106,7 +110,24 @@ export class GalaxyEngine {
   private parent: HTMLElement;
   private regenTimer = 0;
   private labelAccum = 0;
+  private hudAccum = 0;
   private proj = new THREE.Vector3();
+  private flight = new FlightSim();
+  private craft: Craft | null = null;
+  private approach: ApproachWorld | null = null;
+  private flyWas = false;
+  private lastTarget: string | null = null;
+  private observePos = new THREE.Vector3(0, 22, 17);
+  private _fwd = new THREE.Vector3();
+  private _look = new THREE.Vector3();
+  private _camDesired = new THREE.Vector3();
+  private _ship = new THREE.Vector3();
+  private _right = new THREE.Vector3();
+  private streaks: THREE.Points | null = null;
+  private streakGeo: THREE.BufferGeometry | null = null;
+  private streakMat: THREE.PointsMaterial | null = null;
+  private streakOrigin: Float32Array | null = null;
+  private hudFov = 52;
 
   constructor(private canvas: HTMLCanvasElement) {
     const parent = canvas.parentElement ?? document.body;
@@ -114,20 +135,21 @@ export class GalaxyEngine {
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      antialias: true,
       alpha: false,
       powerPreference: "high-performance",
       stencil: false,
+      failIfMajorPerformanceCaveat: false,
     });
     this.renderer.setClearColor(0x050508, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.5));
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(52, 1, 0.15, 400);
     this.scene.add(this.galaxy);
 
-    this.tex = glowTexture(64);
+    this.tex = glowTexture(256);
     this.halo = haloStars(1400);
     this.scene.add(this.halo.pts);
 
@@ -140,17 +162,38 @@ export class GalaxyEngine {
     this.controls.enablePan = true;
     this.controls.target.set(0, 0, 0);
 
+    this.craft = createCraft(this.tex, this.renderer.getPixelRatio());
+    this.scene.add(this.craft.group);
+    this.approach = new ApproachWorld(this.tex, useGalaxyStore.getState().quality);
+    this.galaxy.add(this.approach.group);
+    this.initStreaks(420);
+
     this.resize();
     this.sync(true);
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(parent);
+    this.ro.observe(canvas);
+    this.onWinResize = () => this.resize();
+    window.addEventListener("resize", this.onWinResize);
+    window.visualViewport?.addEventListener("resize", this.onWinResize);
+    flightInput.listen();
+    this.bindProbe();
 
     this.renderer.setAnimationLoop(() => this.tick());
   }
 
+  private onWinResize: () => void;
+
   private resize() {
-    const w = Math.max(1, this.parent.clientWidth);
-    const h = Math.max(1, this.parent.clientHeight);
+    if (this.disposed) return;
+    const w = Math.max(
+      1,
+      this.parent.clientWidth || this.canvas.clientWidth || window.innerWidth,
+    );
+    const h = Math.max(
+      1,
+      this.parent.clientHeight || this.canvas.clientHeight || window.innerHeight,
+    );
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -196,7 +239,8 @@ export class GalaxyEngine {
   }
 
   private applyLive(s: Snapshot) {
-    this.controls.autoRotate = s.autoRotate && !s.paused;
+    this.controls.autoRotate = s.autoRotate && !s.paused && !s.flyMode;
+    this.controls.enabled = !s.flyMode;
     if (this.layers.dust) this.layers.dust.visible = s.showDust;
     if (this.layers.hii) this.layers.hii.visible = s.showHii;
     if (this.sunSprite) this.sunSprite.visible = s.showLabels;
@@ -206,7 +250,7 @@ export class GalaxyEngine {
       m.uniforms.uPertAmp.value = s.params.pertAmp;
       m.uniforms.uBrightness.value = s.brightness;
     }
-    if (Math.abs(s.params.inclination - this.lastInc) > 0.05) {
+    if (!s.flyMode && Math.abs(s.params.inclination - this.lastInc) > 0.05) {
       this.placeCamera(s.params.inclination);
       this.lastInc = s.params.inclination;
     }
@@ -275,6 +319,8 @@ export class GalaxyEngine {
     this.addCoreGlow();
     this.addCompanions(s.preset, params, counts.stars);
     this.addSunMarker(s.preset, params);
+    this.approach?.rebuild(s.preset, params, quality);
+    if (this.sunSprite) this.approach?.attachSunMarker(this.sunSprite, this.sunRings);
 
     useEngineStats.setState({
       starCount: buf.stars.count,
@@ -318,16 +364,20 @@ export class GalaxyEngine {
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      opacity: 0.95,
+      opacity: 1,
       toneMapped: false,
     });
     const sprite = new THREE.Sprite(mat);
-    sprite.scale.set(0.7, 0.7, 1);
+    sprite.scale.set(0.95, 0.95, 1);
     sprite.position.set(sun.world.x, sun.world.y, sun.world.z);
     this.galaxy.add(sprite);
     this.sunSprite = sprite;
 
-    const makeRing = (inner: number, outer: number, opacity: number) => {
+    const rings: [number, number, number][] = [
+      [0.42, 0.5, 0.85],
+      [0.72, 0.8, 0.45],
+    ];
+    for (const [inner, outer, opacity] of rings) {
       const ringGeo = new THREE.RingGeometry(inner, outer, 48);
       ringGeo.rotateX(-Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({
@@ -342,9 +392,7 @@ export class GalaxyEngine {
       ring.position.copy(sprite.position);
       this.galaxy.add(ring);
       this.sunRings.push(ring);
-    };
-    makeRing(0.38, 0.46, 0.75);
-    makeRing(0.62, 0.68, 0.4);
+    }
   }
 
   private addCoreGlow() {
@@ -421,13 +469,13 @@ export class GalaxyEngine {
       }
       return;
     }
-    this.camera.updateMatrixWorld();
     const marks = landmarksFor(s.preset, s.params);
     const sun = marks.find((m) => m.kind === "sun");
     if (sun && this.sunSprite) {
       this.sunSprite.position.set(sun.world.x, sun.world.y, sun.world.z);
       for (const ring of this.sunRings) ring.position.copy(this.sunSprite.position);
     }
+    this.camera.updateMatrixWorld();
     const w = this.parent.clientWidth;
     const h = this.parent.clientHeight;
     const desktop = w >= 1024;
@@ -447,9 +495,9 @@ export class GalaxyEngine {
         padT: s.uiHidden ? 24 : 88,
         padB: desktop ? 36 : 78,
       },
-      this.camera.position,
+      { x: this.camera.position.x, z: this.camera.position.z },
     );
-    if (!force && labelsEq(useLandmarkScreen.getState().labels, labels)) return;
+    if (!force && labelsUnchanged(useLandmarkScreen.getState().labels, labels)) return;
     useLandmarkScreen.setState({ labels });
   }
 
@@ -467,7 +515,9 @@ export class GalaxyEngine {
       m.uniforms.uTick.value = now * 0.001;
     }
 
-    this.controls.update();
+    this.stepFlight(dt, s);
+
+    if (!s.flyMode) this.controls.update();
     this.renderer.render(this.scene, this.camera);
 
     this.labelAccum += dt;
@@ -486,12 +536,197 @@ export class GalaxyEngine {
     }
   }
 
+  private stepFlight(dt: number, s: Snapshot) {
+    const nowSec = performance.now() * 0.001;
+    const marks = landmarksFor(s.preset, s.params);
+    if (s.flyMode && !this.flyWas) {
+      this.observePos.copy(this.camera.position);
+      this.flight.spawn(marks, s.targetId);
+      this.lastTarget = s.targetId;
+      this.camera.near = 0.008;
+      this.hudFov = 50;
+      this.camera.fov = 50;
+      this.camera.updateProjectionMatrix();
+      this.flight.forward(this._fwd);
+      this.placeChaseCam(this.flight.state, 1);
+    }
+    if (!s.flyMode && this.flyWas) {
+      this.camera.near = 0.15;
+      this.camera.fov = 52;
+      this.camera.updateProjectionMatrix();
+      this.placeCamera(s.params.inclination);
+      this.lastInc = s.params.inclination;
+      this.lastTarget = null;
+      if (this.sunSprite) this.sunSprite.scale.set(0.95, 0.95, 1);
+      useFlightHud.setState({ flying: false, speed: 0, dist: 0, targetName: "", arrived: false });
+    }
+    this.flyWas = s.flyMode;
+
+    if (this.craft) this.craft.group.visible = s.flyMode;
+    if (this.streaks) this.streaks.visible = s.flyMode && this.flight.state.speed > 0.35;
+
+    if (!s.flyMode) {
+      this._ship.copy(this.camera.position);
+      this.approach?.update(this._ship, false, nowSec, this.renderer.getPixelRatio(), null);
+      return;
+    }
+
+    if (s.targetId !== this.lastTarget) {
+      this.flight.engage();
+      this.lastTarget = s.targetId;
+    }
+
+    const target = s.targetId ? marks.find((m) => m.id === s.targetId) ?? null : null;
+    if (!s.paused) {
+      this.flight.step(dt, flightInput.sample(), target, s.autoApproach);
+    }
+
+    const st = this.flight.state;
+    this.flight.forward(this._fwd);
+    if (this.craft) {
+      this.craft.group.position.set(st.x, st.y, st.z);
+      this._look.set(st.x + this._fwd.x, st.y + this._fwd.y, st.z + this._fwd.z);
+      this.craft.group.up.set(0, 1, 0);
+      this.craft.group.lookAt(this._look);
+      this.craft.group.rotateZ(st.bank * 0.45);
+      const thrust = Math.min(1, Math.abs(st.speed) / 6);
+      this.craft.setThrust(thrust, nowSec);
+    }
+
+    this.placeChaseCam(st, dt);
+    this.updateStreaks(dt, st.speed);
+    this._ship.set(st.x, st.y, st.z);
+    this.approach?.update(this._ship, true, nowSec, this.renderer.getPixelRatio(), s.targetId);
+
+    this.hudAccum += dt;
+    if (this.hudAccum >= 0.08) {
+      this.hudAccum = 0;
+      const dist = target
+        ? Math.hypot(target.world.x - st.x, target.world.y - st.y, target.world.z - st.z)
+        : 0;
+      useFlightHud.setState({
+        flying: true,
+        speed: st.speed,
+        dist,
+        targetName: target?.name ?? "",
+        arrived: st.arrived,
+      });
+    }
+  }
+
+  private placeChaseCam(st: { x: number; y: number; z: number; speed: number }, dt: number) {
+    this._right.set(-this._fwd.z, 0, this._fwd.x);
+    if (this._right.lengthSq() < 1e-8) this._right.set(1, 0, 0);
+    else this._right.normalize();
+    this._camDesired.set(
+      st.x - this._fwd.x * 0.46 + this._right.x * 0.07,
+      st.y - this._fwd.y * 0.46 + 0.09,
+      st.z - this._fwd.z * 0.46 + this._right.z * 0.07,
+    );
+    const k = dt >= 1 ? 1 : 1 - Math.exp(-7.4 * dt);
+    this.camera.position.lerp(this._camDesired, k);
+    this._look.set(st.x + this._fwd.x * 0.14, st.y + this._fwd.y * 0.14 + 0.01, st.z + this._fwd.z * 0.14);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(this._look);
+    this.hudFov = THREE.MathUtils.lerp(this.hudFov, 50 + Math.min(8, Math.abs(st.speed) * 0.9), k);
+    if (Math.abs(this.camera.fov - this.hudFov) > 0.05) {
+      this.camera.fov = this.hudFov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  private initStreaks(n: number) {
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    this.streakOrigin = new Float32Array(n * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 0.045,
+      map: this.tex,
+      vertexColors: true,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+      opacity: 0.95,
+      toneMapped: false,
+    });
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    pts.visible = false;
+    this.scene.add(pts);
+    this.streaks = pts;
+    this.streakGeo = geo;
+    this.streakMat = mat;
+    for (let i = 0; i < n; i++) this.respawnStreak(i, true);
+  }
+
+  private respawnStreak(i: number, anywhere = false) {
+    const o = this.streakOrigin;
+    if (!o) return;
+    const cam = this.camera.position;
+    const spread = anywhere ? 5.5 : 3.6;
+    o[i * 3] = cam.x + (Math.random() - 0.5) * spread + this._fwd.x * (anywhere ? 0 : 2.2);
+    o[i * 3 + 1] = cam.y + (Math.random() - 0.5) * spread * 0.55 + this._fwd.y * (anywhere ? 0 : 2.2);
+    o[i * 3 + 2] = cam.z + (Math.random() - 0.5) * spread + this._fwd.z * (anywhere ? 0 : 2.2);
+    if (this.streakGeo) {
+      const col = this.streakGeo.getAttribute("color") as THREE.BufferAttribute;
+      const rgb = blackbodyRgb(3800 + Math.random() * 8500);
+      col.setXYZ(i, rgb[0], rgb[1], rgb[2]);
+      col.needsUpdate = true;
+    }
+  }
+
+  private updateStreaks(dt: number, speed: number) {
+    if (!this.streaks || !this.streakGeo || !this.streakOrigin) return;
+    const pos = this.streakGeo.getAttribute("position") as THREE.BufferAttribute;
+    const n = this.streakOrigin.length / 3;
+    const cam = this.camera.position;
+    this.streakMat && (this.streakMat.size = 0.03 + Math.min(0.05, Math.abs(speed) * 0.006));
+    for (let i = 0; i < n; i++) {
+      const ix = i * 3;
+      this.streakOrigin[ix] -= this._fwd.x * speed * dt * 1.55;
+      this.streakOrigin[ix + 1] -= this._fwd.y * speed * dt * 1.55;
+      this.streakOrigin[ix + 2] -= this._fwd.z * speed * dt * 1.55;
+      const dx = this.streakOrigin[ix] - cam.x;
+      const dy = this.streakOrigin[ix + 1] - cam.y;
+      const dz = this.streakOrigin[ix + 2] - cam.z;
+      const along = dx * this._fwd.x + dy * this._fwd.y + dz * this._fwd.z;
+      if (along < -2.4 || dx * dx + dy * dy + dz * dz > 42) this.respawnStreak(i);
+      pos.setXYZ(i, this.streakOrigin[ix], this.streakOrigin[ix + 1], this.streakOrigin[ix + 2]);
+    }
+    pos.needsUpdate = true;
+  }
+
+  private bindProbe() {
+    window.__controlsTest = {
+      getYaw: () => this.flight.state.yaw,
+      getSpeed: () => this.flight.state.speed,
+      setKeys: (codes) => flightInput.setKeys(codes),
+      setSteer: (v) => flightInput.setSteer(v),
+      enterFly: () => useGalaxyStore.getState().setFlyMode(true),
+    };
+  }
+
   dispose() {
     this.disposed = true;
     window.clearTimeout(this.regenTimer);
     this.ro.disconnect();
+    window.removeEventListener("resize", this.onWinResize);
+    window.visualViewport?.removeEventListener("resize", this.onWinResize);
     this.renderer.setAnimationLoop(null);
     this.controls.dispose();
+    flightInput.dispose();
+    delete window.__controlsTest;
+    this.craft?.dispose();
+    if (this.craft) this.scene.remove(this.craft.group);
+    this.approach?.dispose();
+    if (this.approach) this.galaxy.remove(this.approach.group);
+    if (this.streaks) this.scene.remove(this.streaks);
+    this.streakGeo?.dispose();
+    this.streakMat?.dispose();
     this.clearCompanions();
     this.clearSun();
     for (const g of this.geos) g.dispose();
@@ -502,5 +737,6 @@ export class GalaxyEngine {
     this.tex.dispose();
     this.renderer.dispose();
     useLandmarkScreen.setState({ labels: [] });
+    useFlightHud.setState({ flying: false, speed: 0, dist: 0, targetName: "", arrived: false });
   }
 }

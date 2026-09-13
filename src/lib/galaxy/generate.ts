@@ -78,58 +78,106 @@ function sampleTheta(rng: () => number, r: number, p: GalaxyParams, tight: numbe
 }
 
 function diskTemp(r: number, p: GalaxyParams, rng: () => number, onArm: boolean) {
-  const inner = Math.exp((-r * r) / (p.radCore * p.radCore * 1.8));
-  let t = 3200 + inner * 2200 + rng() * 900;
-  if (onArm) t += 1800 + rng() * 4200;
-  if (r > p.radGalaxy * 0.85) t -= 400;
-  return t;
+  const inner = 1 - Math.min(1, r / p.radGalaxy);
+  const bulge = Math.exp((-r * r) / (p.radCore * p.radCore * 0.7));
+  if (onArm && rng() < 0.38 + inner * 0.1) {
+    return 8200 + rng() * 5000;
+  }
+  if (bulge > 0.5) {
+    return 3000 + rng() * 1600;
+  }
+  return 3600 + rng() * 2800 + inner * 800;
 }
 
-export function generateGalaxy(params: GalaxyParams, counts: QualityCounts): GalaxyBuffers {
-  const rng = mulberry32(params.seed);
+export function generateGalaxy(p: GalaxyParams, counts: QualityCounts): GalaxyBuffers {
+  const rng = mulberry32(p.seed >>> 0);
   const stars = alloc(counts.stars);
-  for (let i = 0; i < counts.stars; i++) {
-    const r = sampleRadius(rng, params);
-    const onArm = r > params.radCore * 0.7 && rng() < 0.62;
-    const theta = sampleTheta(rng, r, params, onArm ? 0.78 : 0.18);
-    const hot = onArm && rng() < 0.22;
-    writeParticle(stars, i, params, rng, {
-      r,
-      theta,
-      temp: diskTemp(r, params, rng, onArm),
-      mag: hot ? 0.55 + rng() * 0.5 : 0.18 + rng() * 0.45,
-      size: hot ? 0.085 + rng() * 0.05 : 0.035 + rng() * 0.04,
-      zScale: 0.18 + (1 - r / (params.radGalaxy * 1.6)) * 0.22,
-    });
-  }
-
   const dust = alloc(counts.dust);
-  for (let i = 0; i < counts.dust; i++) {
-    const r = 0.8 + rng() * params.radGalaxy * 1.05;
-    const theta = sampleTheta(rng, r, params, 0.84);
-    writeParticle(dust, i, params, rng, {
+  const hii = alloc(counts.hii);
+
+  for (let i = 0; i < counts.stars; i++) {
+    const r = sampleRadius(rng, p);
+    const theta = sampleTheta(rng, r, p, 0.28);
+    const onArm = Math.abs(Math.sin(theta)) < 0.45;
+    const hot = onArm && i < counts.stars / 8;
+    const giant = i < counts.stars / 160;
+    const temp = hot ? 8800 + rng() * 5000 : diskTemp(r, p, rng, onArm);
+    const mag = giant
+      ? 0.7 + rng() * 0.3
+      : hot
+        ? 0.38 + rng() * 0.32
+        : 0.1 + rng() * 0.28;
+    const size = giant ? 7 + rng() * 4 : hot ? 3.6 + rng() * 2.2 : 1.6 + rng() * 1.6;
+    writeParticle(stars, i, p, rng, {
       r,
       theta,
-      temp: 1800,
-      mag: 0.08 + rng() * 0.12,
-      size: 0.09 + rng() * 0.08,
-      zScale: 0.07,
-      color: [0.42 + rng() * 0.12, 0.22 + rng() * 0.08, 0.12 + rng() * 0.05],
+      temp,
+      mag,
+      size,
+      zScale: 0.32 + (r / p.radGalaxy) * 0.12,
     });
   }
 
-  const hii = alloc(counts.hii);
-  for (let i = 0; i < counts.hii; i++) {
-    const r = params.radCore * 0.9 + rng() * params.radGalaxy * 0.85;
-    const theta = sampleTheta(rng, r, params, 0.92);
-    writeParticle(hii, i, params, rng, {
+  const nucleus = Math.min(280, counts.stars);
+  for (let i = 0; i < nucleus; i++) {
+    const r = Math.pow(rng(), 1.7) * Math.min(1.05, p.radCore * 0.28);
+    writeParticle(stars, i, p, rng, {
+      r,
+      theta: rng() * Math.PI * 2,
+      temp: 3200 + rng() * 2000,
+      mag: 0.35 + rng() * 0.4,
+      size: 2.8 + rng() * 3.2,
+      zScale: 0.5,
+    });
+  }
+
+  for (let i = 0; i < counts.dust; i++) {
+    const r = Math.min(Math.max(sampleRadius(rng, p), 0.6), p.radGalaxy * 1.4);
+    const theta = sampleTheta(rng, r, p, 0.4);
+    const warm = 0.18 + Math.min(r / p.radGalaxy, 1) * 0.22;
+    writeParticle(dust, i, p, rng, {
       r,
       theta,
-      temp: 9000 + rng() * 6000,
-      mag: 0.7 + rng() * 0.35,
-      size: 0.16 + rng() * 0.1,
-      zScale: 0.05,
-      color: [1, 0.38 + rng() * 0.22, 0.62 + rng() * 0.2],
+      temp: 2400,
+      mag: 0.018 + rng() * 0.03,
+      size: 4.5 + rng() * 5.5,
+      zScale: 0.16,
+      color: [0.42 * warm + 0.12, 0.18 * warm + 0.05, 0.04],
+    });
+  }
+
+  const filaments = Math.max(18, Math.floor(counts.dust / 220));
+  let fi = 0;
+  for (let f = 0; f < filaments && fi < counts.dust; f++) {
+    let r = p.radCore + rng() * (p.radGalaxy - p.radCore);
+    const arm = rng() < 0.5 ? 0 : Math.PI;
+    const n = 14 + Math.floor(rng() * 22);
+    for (let j = 0; j < n && fi < counts.dust; j++, fi++) {
+      r = Math.max(0.8, r + (rng() - 0.5) * 0.9);
+      writeParticle(dust, counts.dust - 1 - fi, p, rng, {
+        r,
+        theta: arm + (rng() - 0.5) * 0.22,
+        temp: 2200,
+        mag: 0.022 + rng() * 0.03,
+        size: 5 + rng() * 5,
+        zScale: 0.12,
+        color: [0.32, 0.12, 0.04],
+      });
+    }
+  }
+
+  for (let i = 0; i < counts.hii; i++) {
+    const r = p.radCore * 0.9 + rng() * p.radGalaxy * 0.85;
+    const theta = sampleTheta(rng, r, p, 0.55);
+    const pink = rng() > 0.32;
+    writeParticle(hii, i, p, rng, {
+      r,
+      theta,
+      temp: 7000,
+      mag: 0.12 + rng() * 0.18,
+      size: 8 + rng() * 12,
+      zScale: 0.14,
+      color: pink ? [1.0, 0.32, 0.52] : [0.4, 0.68, 1.0],
     });
   }
 
@@ -137,20 +185,23 @@ export function generateGalaxy(params: GalaxyParams, counts: QualityCounts): Gal
 }
 
 export function generateStaticCloud(spec: CloudSpec, seed: number) {
-  const rng = mulberry32((seed ^ spec.id.split("").reduce((a, c) => a + c.charCodeAt(0), 0)) >>> 0);
-  const pos = new Float32Array(spec.n * 3);
-  const color = new Float32Array(spec.n * 3);
-  for (let i = 0; i < spec.n; i++) {
+  const rng = mulberry32((seed + spec.id.length * 997) >>> 0);
+  const n = spec.n;
+  const pos = new Float32Array(n * 3);
+  const color = new Float32Array(n * 3);
+  const size = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
     const gx = gaussian(rng);
     const gy = gaussian(rng);
     const gz = gaussian(rng);
     pos[i * 3] = spec.x + gx * spec.rx;
     pos[i * 3 + 1] = spec.y + gy * spec.ry;
     pos[i * 3 + 2] = spec.z + gz * spec.rz;
-    const k = 0.55 + rng() * 0.45;
-    color[i * 3] = spec.color[0] * k;
-    color[i * 3 + 1] = spec.color[1] * k;
-    color[i * 3 + 2] = spec.color[2] * k;
+    const flicker = 0.65 + rng() * 0.45;
+    color[i * 3] = spec.color[0] * flicker;
+    color[i * 3 + 1] = spec.color[1] * flicker;
+    color[i * 3 + 2] = spec.color[2] * flicker;
+    size[i] = 0.7 + rng() * 1.6;
   }
-  return { pos, color };
+  return { pos, color, size, count: n };
 }
